@@ -1,4 +1,6 @@
 # May require: pip install git+https://github.com/openai/CLIP.git
+import os
+
 from ultralytics.models.yolo.yoloe import YOLOEPESegTrainer
 
 from constants import dataset_yaml_path, dataset_SEG_yaml_path, results_root, ALL_MODELS
