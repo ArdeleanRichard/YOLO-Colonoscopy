@@ -5,7 +5,7 @@ import os
 # MODEL OPTIONS: ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yoloe", "yolow"]
 MODEL = "yolo12"
 # ALL_MODELS = ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolow", "yoloe", "yolo26"]
-ALL_MODELS = ["yolo8", "yolo9", "yolo10", "yolo11"]
+ALL_MODELS = ["yolo12", "yolo26", "yolow", "yoloe"]
 
 # DATA OPTIONS: ["CVC-ClinicDB", "CVC-ColonDB", "ETIS-LaribPolypDB"]
 DATA = "CVC-ClinicDB"
