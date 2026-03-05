@@ -3,11 +3,12 @@ import os
 # === CONFIGURATION ===
 
 # MODEL OPTIONS: ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yoloe", "yolow"]
-MODEL = "yolo12"
-ALL_MODELS = ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolow", "yoloe"]
+MODEL = "rtdetr"
+# ALL_MODELS = ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yolow", "yoloe", "yolo26"]
+ALL_MODELS = ["rtdetr", "yoloe", "yolow"]
 
 # DATA OPTIONS: ["CVC-ClinicDB", "CVC-ColonDB", "ETIS-LaribPolypDB"]
-DATA = "ETIS-LaribPolypDB"
+DATA = "CVC-ClinicDB"
 
 
 data_root = f"./data/{DATA}/"

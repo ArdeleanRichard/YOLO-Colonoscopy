@@ -218,3 +218,5 @@ data/BCNB/BCNB_seg/
 data/nuclei/nuclei_seg/
 
 mobileclip_blt.ts
+
+mover.py
