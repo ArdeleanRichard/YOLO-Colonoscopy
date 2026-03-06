@@ -57,6 +57,11 @@ def main_one_dataset():
         iou_threshold=0.5
     )
 
+    # Check size distribution to validate categories
+    print("\n" + "-" * 80)
+    size_dist = analyzer.check_size_distribution()
+    print("-" * 80)
+
     size_df = analyzer.analyze_all()
     analyzer.plot_results(size_df)
     all_dataframes['size'] = size_df
@@ -159,8 +164,8 @@ def main_all_datasets():
     """
 
     # All datasets to analyze
-    ALL_DATASETS = ["BCNB", "nuclei", "TNBC", "MoNuSAC", "CryoNuSeg"]
-    ALL_MODELS = ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yoloe", "yolow"]
+    ALL_DATASETS = ["CVC-ClinicDB", "CVC-ColonDB", "ETIS-LaribPolypDB"]
+    ALL_MODELS = ["rtdetr", "yolo8", "yolo9", "yolo10", "yolo11", "yolo12", "yoloe", "yolow", "yolo26"]
 
     print("=" * 80)
     print("AGGREGATED CROSS-DATASET COMPREHENSIVE ANALYSIS")

@@ -10,31 +10,32 @@ from collections import defaultdict
 from scipy.stats import t
 from itertools import combinations
 
-from analysis_stats import (BoundingBox, load_yolo_boxes, load_inference_boxes, calculate_iou)
+from analysis_stats import (BoundingBox, load_yolo_boxes, load_inference_boxes, calculate_iou,
+                            get_ordered_models, get_display_name)
+from constants import get_size_categories
 
 
 class AggregatedObjectSizeAnalyzer:
     """
     Aggregated Object Size Analysis across multiple datasets
     """
-    
+
     def __init__(self, datasets_info: List[Dict], models: List[str],
                  output_dir: str, iou_threshold: float = 0.5):
         self.datasets_info = datasets_info
         self.models = models
         self.output_dir = output_dir
         self.iou_threshold = iou_threshold
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
-        # Define size categories based on normalized area
-        self.size_categories = {
-            'tiny': (0, 0.0001),      # < 0.01% of image
-            'small': (0.0001, 0.001),  # 0.01% - 0.1%
-            'medium': (0.001, 0.01),   # 0.1% - 1%
-            'large': (0.01, 1.0)       # > 1%
-        }
-    
+
+        # Use configurable size categories from size_config
+        self.size_categories = get_size_categories()
+
+        print("\nUsing size categories:")
+        for name, (min_val, max_val) in self.size_categories.items():
+            print(f"  {name}: {min_val * 100:.4f}% - {max_val * 100:.4f}% of image area")
+
     def categorize_by_size(self, box: BoundingBox) -> str:
         """Categorize a box by its size"""
         area = box.area()
@@ -42,27 +43,70 @@ class AggregatedObjectSizeAnalyzer:
             if min_area <= area < max_area:
                 return category
         return 'large'
-    
+
     def analyze_single_dataset(self, dataset_info: Dict) -> pd.DataFrame:
         """Analyze object size performance for a single dataset"""
         dataset_name = dataset_info['name']
         gt_folder = dataset_info['gt_folder']
         inference_root = dataset_info['inference_root']
         image_folder = dataset_info['image_folder']
-        
+
         print(f"  Analyzing dataset: {dataset_name}")
-        
+
         # Get all image files
         image_files = [f.replace('.txt', '') for f in os.listdir(gt_folder)
-                      if f.endswith('.txt')]
-        
+                       if f.endswith('.txt')]
+
+        # First pass: Count ground truth distribution across size categories
+        print(f"\n  {'=' * 70}")
+        print(f"  GROUND TRUTH SIZE DISTRIBUTION - {dataset_name}")
+        print(f"  {'=' * 70}")
+
+        gt_distribution = {cat: 0 for cat in self.size_categories.keys()}
+        total_gt_boxes = 0
+
+        for img_name in image_files:
+            gt_path = os.path.join(gt_folder, f"{img_name}.txt")
+
+            # Get image dimensions
+            img_height, img_width = None, None
+            for ext in ['.png', '.jpg', '.jpeg', '.tif', '.tiff']:
+                image_path = os.path.join(image_folder, f"{img_name}{ext}")
+                if os.path.exists(image_path):
+                    import cv2
+                    img = cv2.imread(image_path)
+                    if img is not None:
+                        img_height, img_width = img.shape[:2]
+                        break
+
+            if img_width is None and img_height is None:
+                img_width, img_height = 640, 640
+
+            # Load and categorize ground truth boxes
+            gt_boxes = load_yolo_boxes(gt_path)
+            for gt_box in gt_boxes:
+                cat = self.categorize_by_size(gt_box)
+                gt_distribution[cat] += 1
+                total_gt_boxes += 1
+
+        # Print distribution
+        print(f"  Total ground truth boxes: {total_gt_boxes}")
+        print(f"  {'-' * 70}")
+        for cat in self.size_categories.keys():
+            count = gt_distribution[cat]
+            pct = (count / total_gt_boxes * 100) if total_gt_boxes > 0 else 0
+            min_area, max_area = self.size_categories[cat]
+            print(
+                f"  {cat:10s}: {count:6d} boxes ({pct:5.1f}%) | Area range: {min_area * 100:.4f}% - {max_area * 100:.4f}%")
+        print(f"  {'=' * 70}\n")
+
         all_results = []
-        
+
         for model in self.models:
             # Initialize counters for each size category
             category_stats = {cat: {'tp': 0, 'fp': 0, 'fn': 0, 'total_gt': 0}
-                            for cat in self.size_categories.keys()}
-            
+                              for cat in self.size_categories.keys()}
+
             for img_name in image_files:
                 gt_path = os.path.join(gt_folder, f"{img_name}.txt")
                 inf_path = os.path.join(inference_root, model, f"{img_name}.txt")
@@ -79,42 +123,42 @@ class AggregatedObjectSizeAnalyzer:
 
                 if img_width is None and img_height is None:
                     img_width, img_height = 640, 640
-                
+
                 gt_boxes = load_yolo_boxes(gt_path)
                 pred_boxes = load_inference_boxes(inf_path, img_width, img_height)
-                
+
                 # Categorize ground truth boxes
                 gt_by_category = {cat: [] for cat in self.size_categories.keys()}
                 for gt_box in gt_boxes:
                     cat = self.categorize_by_size(gt_box)
                     gt_by_category[cat].append(gt_box)
                     category_stats[cat]['total_gt'] += 1
-                
+
                 # Match predictions to ground truth
                 matched_gt = set()
                 matched_pred = set()
-                
+
                 for i, pred_box in enumerate(pred_boxes):
                     best_iou = 0
                     best_gt_idx = -1
                     best_category = None
-                    
+
                     for cat, gt_list in gt_by_category.items():
                         for j, gt_box in enumerate(gt_list):
                             if gt_box.cls != pred_box.cls:
                                 continue
-                            
+
                             # Create unique identifier for gt_box
                             gt_global_idx = (cat, j)
                             if gt_global_idx in matched_gt:
                                 continue
-                            
+
                             iou = calculate_iou(pred_box, gt_box)
                             if iou > best_iou:
                                 best_iou = iou
                                 best_gt_idx = j
                                 best_category = cat
-                    
+
                     if best_iou >= self.iou_threshold and best_category is not None:
                         # True positive
                         category_stats[best_category]['tp'] += 1
@@ -124,23 +168,23 @@ class AggregatedObjectSizeAnalyzer:
                         # False positive - categorize by prediction size
                         pred_cat = self.categorize_by_size(pred_box)
                         category_stats[pred_cat]['fp'] += 1
-                
+
                 # Count false negatives (unmatched GT)
                 for cat, gt_list in gt_by_category.items():
                     for j, gt_box in enumerate(gt_list):
                         if (cat, j) not in matched_gt:
                             category_stats[cat]['fn'] += 1
-            
+
             # Calculate metrics for each category
             for cat, stats_dict in category_stats.items():
                 tp = stats_dict['tp']
                 fp = stats_dict['fp']
                 fn = stats_dict['fn']
-                
+
                 precision = tp / (tp + fp) if (tp + fp) > 0 else 0
                 recall = tp / (tp + fn) if (tp + fn) > 0 else 0
                 f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-                
+
                 all_results.append({
                     'dataset': dataset_name,
                     'model': model,
@@ -153,33 +197,140 @@ class AggregatedObjectSizeAnalyzer:
                     'recall': recall,
                     'f1': f1
                 })
-        
+
         return pd.DataFrame(all_results)
-    
+
     def analyze_all_datasets(self) -> pd.DataFrame:
         """Analyze all datasets and aggregate results"""
         all_dfs = []
-        
+
+        # Store GT distributions for final summary
+        all_gt_distributions = {}
+
         for dataset_info in self.datasets_info:
             df = self.analyze_single_dataset(dataset_info)
             all_dfs.append(df)
-        
+
+            # Extract GT distribution from results
+            dataset_name = dataset_info['name']
+            gt_dist = df.groupby('size_category')['total_gt'].first().to_dict()
+            all_gt_distributions[dataset_name] = gt_dist
+
         # Combine all results
         combined_df = pd.concat(all_dfs, ignore_index=True)
-        
+
         # Save combined results
         output_path = os.path.join(self.output_dir, 'size_category_all_datasets.csv')
         combined_df.to_csv(output_path, index=False)
         print(f"\nAggregated size category results saved to: {output_path}")
-        
+
         # Also save aggregated summary (summed across datasets)
         aggregated_df = self._aggregate_across_datasets(combined_df)
         agg_output_path = os.path.join(self.output_dir, 'size_category_aggregated_summary.csv')
         aggregated_df.to_csv(agg_output_path, index=False)
         print(f"Aggregated summary saved to: {agg_output_path}")
-        
+
+        # Print comprehensive summary
+        print(f"\n{'=' * 80}")
+        print("GROUND TRUTH DISTRIBUTION SUMMARY - ALL DATASETS")
+        print(f"{'=' * 80}")
+
+        # Aggregate across all datasets
+        total_gt_all_datasets = {cat: 0 for cat in self.size_categories.keys()}
+        overall_total = 0
+
+        for dataset_name, gt_dist in all_gt_distributions.items():
+            dataset_total = sum(gt_dist.values())
+            overall_total += dataset_total
+
+            print(f"\n{dataset_name}:")
+            print(f"  {'─' * 76}")
+            print(f"  {'Category':<12} {'Count':>8} {'Percentage':>12} {'Area Range':<40}")
+            print(f"  {'─' * 76}")
+
+            for cat in self.size_categories.keys():
+                count = gt_dist.get(cat, 0)
+                pct = (count / dataset_total * 100) if dataset_total > 0 else 0
+                min_area, max_area = self.size_categories[cat]
+                area_str = f"{min_area * 100:.4f}% - {max_area * 100:.4f}%"
+                print(f"  {cat:<12} {count:>8} {pct:>11.1f}% {area_str:<40}")
+                total_gt_all_datasets[cat] += count
+
+            print(f"  {'─' * 76}")
+            print(f"  {'TOTAL':<12} {dataset_total:>8}")
+
+        # Overall summary
+        print(f"\n{'=' * 80}")
+        print("AGGREGATED ACROSS ALL DATASETS:")
+        print(f"{'=' * 80}")
+        print(f"  {'Category':<12} {'Count':>8} {'Percentage':>12} {'Area Range':<40}")
+        print(f"  {'─' * 76}")
+
+        for cat in self.size_categories.keys():
+            count = total_gt_all_datasets[cat]
+            pct = (count / overall_total * 100) if overall_total > 0 else 0
+            min_area, max_area = self.size_categories[cat]
+            area_str = f"{min_area * 100:.4f}% - {max_area * 100:.4f}%"
+            print(f"  {cat:<12} {count:>8} {pct:>11.1f}% {area_str:<40}")
+
+        print(f"  {'─' * 76}")
+        print(f"  {'TOTAL':<12} {overall_total:>8}")
+        print(f"{'=' * 80}\n")
+
+        # Save GT distribution summary to file
+        gt_summary_path = os.path.join(self.output_dir, 'ground_truth_size_distribution.txt')
+        with open(gt_summary_path, 'w', encoding='utf-8') as f:
+            f.write("=" * 80 + "\n")
+            f.write("GROUND TRUTH SIZE DISTRIBUTION ANALYSIS\n")
+            f.write("=" * 80 + "\n\n")
+
+            f.write("SIZE CATEGORIES DEFINITION:\n")
+            f.write("-" * 80 + "\n")
+            for cat, (min_area, max_area) in self.size_categories.items():
+                f.write(f"  {cat:<12}: {min_area * 100:>8.4f}% - {max_area * 100:>8.4f}% of image area\n")
+            f.write("\n")
+
+            # Per-dataset distributions
+            for dataset_name, gt_dist in all_gt_distributions.items():
+                dataset_total = sum(gt_dist.values())
+
+                f.write(f"\n{dataset_name}:\n")
+                f.write("  " + "─" * 76 + "\n")
+                f.write(f"  {'Category':<12} {'Count':>8} {'Percentage':>12} {'Area Range':<40}\n")
+                f.write("  " + "─" * 76 + "\n")
+
+                for cat in self.size_categories.keys():
+                    count = gt_dist.get(cat, 0)
+                    pct = (count / dataset_total * 100) if dataset_total > 0 else 0
+                    min_area, max_area = self.size_categories[cat]
+                    area_str = f"{min_area * 100:.4f}% - {max_area * 100:.4f}%"
+                    f.write(f"  {cat:<12} {count:>8} {pct:>11.1f}% {area_str:<40}\n")
+
+                f.write("  " + "─" * 76 + "\n")
+                f.write(f"  {'TOTAL':<12} {dataset_total:>8}\n")
+
+            # Overall summary
+            f.write("\n" + "=" * 80 + "\n")
+            f.write("AGGREGATED ACROSS ALL DATASETS:\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"  {'Category':<12} {'Count':>8} {'Percentage':>12} {'Area Range':<40}\n")
+            f.write("  " + "─" * 76 + "\n")
+
+            for cat in self.size_categories.keys():
+                count = total_gt_all_datasets[cat]
+                pct = (count / overall_total * 100) if overall_total > 0 else 0
+                min_area, max_area = self.size_categories[cat]
+                area_str = f"{min_area * 100:.4f}% - {max_area * 100:.4f}%"
+                f.write(f"  {cat:<12} {count:>8} {pct:>11.1f}% {area_str:<40}\n")
+
+            f.write("  " + "─" * 76 + "\n")
+            f.write(f"  {'TOTAL':<12} {overall_total:>8}\n")
+            f.write("=" * 80 + "\n")
+
+        print(f"Ground truth distribution summary saved to: {gt_summary_path}\n")
+
         return combined_df
-    
+
     def _aggregate_across_datasets(self, df: pd.DataFrame) -> pd.DataFrame:
         """Aggregate metrics across all datasets"""
         # Group by model and size_category, sum TP/FP/FN
@@ -189,7 +340,7 @@ class AggregatedObjectSizeAnalyzer:
             'fn': 'sum',
             'total_gt': 'sum'
         }).reset_index()
-        
+
         # Recalculate metrics
         grouped['precision'] = grouped.apply(
             lambda row: row['tp'] / (row['tp'] + row['fp']) if (row['tp'] + row['fp']) > 0 else 0,
@@ -204,44 +355,169 @@ class AggregatedObjectSizeAnalyzer:
             if (row['precision'] + row['recall']) > 0 else 0,
             axis=1
         )
-        
+
         return grouped
-    
+
     def plot_aggregated_results(self, df: pd.DataFrame):
         """Create visualizations for aggregated results"""
         # Aggregate across datasets for plotting
         agg_df = self._aggregate_across_datasets(df)
-        
-        # Plot 1: F1 score by size category (aggregated)
+
+        # Order models and add display names
+        agg_df = agg_df.copy()
+        ordered_models = get_ordered_models(agg_df['model'].unique())
+        agg_df['model'] = pd.Categorical(agg_df['model'], categories=ordered_models, ordered=True)
+        agg_df = agg_df.sort_values('model')
+        agg_df['display_name'] = agg_df['model'].apply(get_display_name)
+
+        # Extract GT distribution
+        gt_dist_df = df.groupby('size_category')['total_gt'].sum().reset_index()
+        gt_dist_df.columns = ['size_category', 'gt_count']
+
+        # NEW: Create comprehensive visualization with GT distribution
+        categories = list(self.size_categories.keys())
+
+        fig = plt.figure(figsize=(16, 10))
+
+        # Plot 1: Ground Truth Distribution
+        ax1 = plt.subplot(2, 2, 1)
+        gt_counts = [gt_dist_df[gt_dist_df['size_category'] == cat]['gt_count'].values[0]
+                     if len(gt_dist_df[gt_dist_df['size_category'] == cat]) > 0 else 0
+                     for cat in categories]
+
+        colors_gt = plt.cm.viridis(np.linspace(0, 0.8, len(categories)))
+        bars = ax1.bar(categories, gt_counts, color=colors_gt, edgecolor='black', linewidth=1.5)
+        ax1.set_xlabel('Size Category', fontsize=12, fontweight='bold')
+        ax1.set_ylabel('Number of GT Boxes', fontsize=12, fontweight='bold')
+        ax1.set_title('Ground Truth Distribution by Size', fontsize=13, fontweight='bold')
+        ax1.grid(axis='y', alpha=0.3)
+
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width() / 2., height,
+                     f'{int(height)}',
+                     ha='center', va='bottom', fontweight='bold', fontsize=10)
+
+        # Plot 2: Recall by Size Category (all models)
+        ax2 = plt.subplot(2, 2, 2)
+        pivot_recall = agg_df.pivot(index='display_name', columns='size_category', values='recall')
+        pivot_recall = pivot_recall[[c for c in categories if c in pivot_recall.columns]]  # Ensure correct order
+
+        x = np.arange(len(categories))
+        width = 0.08
+        multiplier = 0
+
+        for model in pivot_recall.index:
+            offset = width * multiplier
+            values = pivot_recall.loc[model].values
+            ax2.bar(x + offset, values, width, label=model, edgecolor='black', linewidth=0.5)
+            multiplier += 1
+
+        ax2.set_xlabel('Size Category', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Recall', fontsize=12, fontweight='bold')
+        ax2.set_title('Recall by Size Category', fontsize=13, fontweight='bold')
+        ax2.set_xticks(x + width * (len(pivot_recall.index) - 1) / 2)
+        ax2.set_xticklabels(categories)
+        ax2.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=8)
+        ax2.grid(axis='y', alpha=0.3)
+        ax2.set_ylim([0, 1])
+
+        # Plot 3: F1 Score by Size Category
+        ax3 = plt.subplot(2, 2, 3)
+        pivot_f1 = agg_df.pivot(index='display_name', columns='size_category', values='f1')
+        pivot_f1 = pivot_f1[[c for c in categories if c in pivot_f1.columns]]  # Ensure correct order
+
+        x = np.arange(len(categories))
+        multiplier = 0
+
+        for model in pivot_f1.index:
+            offset = width * multiplier
+            values = pivot_f1.loc[model].values
+            ax3.bar(x + offset, values, width, label=model, edgecolor='black', linewidth=0.5)
+            multiplier += 1
+
+        ax3.set_xlabel('Size Category', fontsize=12, fontweight='bold')
+        ax3.set_ylabel('F1 Score', fontsize=12, fontweight='bold')
+        ax3.set_title('F1 Score by Size Category', fontsize=13, fontweight='bold')
+        ax3.set_xticks(x + width * (len(pivot_f1.index) - 1) / 2)
+        ax3.set_xticklabels(categories)
+        ax3.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=8)
+        ax3.grid(axis='y', alpha=0.3)
+        ax3.set_ylim([0, 1])
+
+        # Plot 4: Detection Rate vs GT Distribution
+        ax4 = plt.subplot(2, 2, 4)
+
+        # Calculate average recall per category
+        avg_recall = agg_df.groupby('size_category')['recall'].mean().reset_index()
+        avg_recall = avg_recall.set_index('size_category').loc[categories].reset_index()
+
+        # Normalize GT counts for comparison
+        total_gt = sum(gt_counts)
+        gt_pcts = [count / total_gt * 100 if total_gt > 0 else 0 for count in gt_counts]
+        recall_pcts = avg_recall['recall'].values * 100
+
+        x_pos = np.arange(len(categories))
+        width = 0.35
+
+        bars1 = ax4.bar(x_pos - width / 2, gt_pcts, width, label='GT Distribution %',
+                        color='steelblue', edgecolor='black', linewidth=1.5)
+        bars2 = ax4.bar(x_pos + width / 2, recall_pcts, width, label='Avg Recall %',
+                        color='coral', edgecolor='black', linewidth=1.5)
+
+        ax4.set_xlabel('Size Category', fontsize=12, fontweight='bold')
+        ax4.set_ylabel('Percentage (%)', fontsize=12, fontweight='bold')
+        ax4.set_title('GT Distribution vs Average Detection Rate', fontsize=13, fontweight='bold')
+        ax4.set_xticks(x_pos)
+        ax4.set_xticklabels(categories)
+        ax4.legend(fontsize=10)
+        ax4.grid(axis='y', alpha=0.3)
+
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax4.text(bar.get_x() + bar.get_width() / 2., height,
+                         f'{height:.1f}',
+                         ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+        plt.suptitle('Object Size Category Analysis - Aggregated Results',
+                     fontsize=16, fontweight='bold', y=0.995)
+        plt.tight_layout(rect=[0, 0, 0.95, 0.99])
+        plt.savefig(os.path.join(self.output_dir, 'size_category_comprehensive.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Original Plot 1: F1 score by size category (aggregated)
         plt.figure(figsize=(12, 6))
-        
-        categories = ['tiny', 'small', 'medium', 'large']
+
+        categories = list(self.size_categories.keys())
         x = np.arange(len(categories))
         width = 0.1
-        
+
         for i, model in enumerate(self.models):
             model_data = agg_df[agg_df['model'] == model]
             f1_scores = [model_data[model_data['size_category'] == cat]['f1'].values[0]
-                        if len(model_data[model_data['size_category'] == cat]) > 0 else 0
-                        for cat in categories]
-            
+                         if len(model_data[model_data['size_category'] == cat]) > 0 else 0
+                         for cat in categories]
+
             plt.bar(x + i * width, f1_scores, width, label=model.upper())
-        
+
         plt.xlabel('Object Size Category', fontsize=12)
         plt.ylabel('F1 Score', fontsize=12)
         plt.title('F1 Score by Object Size (All Datasets)', fontsize=14, fontweight='bold')
-        categories_plot = ['tiny\n<0.01%', 'small\n0.01% - 0.1%', 'medium\n0.1% - 1%', 'large\n>1%']
+        categories_plot = ['small\n<0.5%', 'medium\n0.5% - 1%', 'large\n1% - 5%', 'very large\n>5%']
         plt.xticks(x + width * (len(self.models) - 1) / 2, categories_plot)
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(axis='y', alpha=0.3)
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'f1_by_size_aggregated.png'), dpi=300)
         plt.close()
-        
+
         # Plot 2: Heatmap of F1 scores (aggregated)
         pivot_df = agg_df.pivot(index='model', columns='size_category', values='f1')
         pivot_df = pivot_df[categories]  # Ensure correct order
-        
+
         plt.figure(figsize=(10, 6))
         sns.heatmap(pivot_df, annot=True, fmt='.3f', cmap='RdYlGn', vmin=0, vmax=1, cbar_kws={'label': 'F1 Score'})
         plt.title('F1 Score by Size Category', fontsize=14, fontweight='bold')
@@ -250,44 +526,44 @@ class AggregatedObjectSizeAnalyzer:
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'f1_heatmap_aggregated.png'), dpi=300)
         plt.close()
-        
+
         # Plot 3: Per-dataset comparison
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         axes = axes.flatten()
-        
+
         datasets = df['dataset'].unique()
         for idx, dataset in enumerate(datasets):
             if idx >= len(axes):
                 break
-            
+
             ax = axes[idx]
             dataset_df = df[df['dataset'] == dataset]
-            
+
             for model in self.models:
                 model_data = dataset_df[dataset_df['model'] == model]
                 f1_scores = [model_data[model_data['size_category'] == cat]['f1'].values[0]
-                            if len(model_data[model_data['size_category'] == cat]) > 0 else 0
-                            for cat in categories]
+                             if len(model_data[model_data['size_category'] == cat]) > 0 else 0
+                             for cat in categories]
 
                 categories_plot = ['tiny\n<0.01%', 'small\n0.01% - 0.1%', 'medium\n0.1% - 1%', 'large\n>1%']
                 ax.plot(categories_plot, f1_scores, marker='o', label=model.upper(), linewidth=2)
-            
+
             ax.set_title(f'{dataset}', fontsize=12, fontweight='bold')
             ax.set_xlabel('Size Category', fontsize=10)
             ax.set_ylabel('F1 Score', fontsize=10)
             ax.legend(fontsize=8)
             ax.grid(alpha=0.3)
             ax.set_ylim([0, 1])
-        
+
         # Hide unused subplots
         for idx in range(len(datasets), len(axes)):
             axes[idx].set_visible(False)
-        
+
         plt.suptitle('F1 Score by Size Category - Per Dataset Comparison', fontsize=16, fontweight='bold')
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'f1_by_size_per_dataset.png'), dpi=300)
         plt.close()
-        
+
         print(f"Aggregated size analysis plots saved to: {self.output_dir}")
 
 
@@ -377,11 +653,17 @@ class AggregatedStatisticalAnalyzer:
 
         plt.figure(figsize=(14, 6))
 
-        df_sorted = df.sort_values('mean', ascending=False)
-        models = df_sorted['model'].values
-        means = df_sorted['mean'].values
-        ci_lower = df_sorted['ci_lower'].values
-        ci_upper = df_sorted['ci_upper'].values
+        # Order models and add display names
+        df = df.copy()
+        ordered_models = get_ordered_models(df['model'].unique())
+        df['model'] = pd.Categorical(df['model'], categories=ordered_models, ordered=True)
+        df = df.sort_values('model')
+        df['display_name'] = df['model'].apply(get_display_name)
+
+        models = df['display_name'].values
+        means = df['mean'].values
+        ci_lower = df['ci_lower'].values
+        ci_upper = df['ci_upper'].values
 
         x = np.arange(len(models))
 
@@ -398,7 +680,7 @@ class AggregatedStatisticalAnalyzer:
         plt.title(
             f'Model Performance with 95% Confidence Intervals\n(Aggregated across {df["n_datasets"].iloc[0]:.0f} datasets)',
             fontsize=14, fontweight='bold')
-        plt.xticks(x, [m.upper() for m in models], rotation=45, ha='right')
+        plt.xticks(x, models, rotation=45, ha='right')
         plt.grid(axis='y', alpha=0.3, linestyle='--')
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, f'{metric}_ci_plot_aggregated.png'), dpi=300, bbox_inches='tight')
@@ -758,7 +1040,8 @@ class AggregatedStatisticalAnalyzer:
         ax.set_yticks(y_positions)
         ax.set_yticklabels([m.upper() for m in models], fontsize=11)
         ax.set_xlabel('Average Rank', fontsize=12, fontweight='bold')
-        ax.set_title(f'Critical Difference Diagram - {metric}\n(CD = {critical_difference:.3f})', fontsize=14, fontweight='bold')
+        ax.set_title(f'Critical Difference Diagram - {metric}\n(CD = {critical_difference:.3f})', fontsize=14,
+                     fontweight='bold')
 
         # Draw lines connecting non-significant groups
         # Find groups of models that are not significantly different
@@ -808,7 +1091,8 @@ class AggregatedStatisticalAnalyzer:
         if len(df) == 0:
             return
 
-        models = sorted(list(set(df['model_a'].unique()) | set(df['model_b'].unique())))
+        models = get_ordered_models(list(set(df['model_a'].unique()) | set(df['model_b'].unique())))
+        display_names = [get_display_name(m) for m in models]
 
         # Create matrix for p-values and performance differences
         p_matrix = np.ones((len(models), len(models)))
@@ -846,24 +1130,26 @@ class AggregatedStatisticalAnalyzer:
         # Heatmap 1: P-values
         sns.heatmap(p_matrix, annot=annot_matrix, fmt='',
                     cmap='RdYlGn', vmin=0, vmax=0.1,
-                    xticklabels=[m.upper() for m in models],
-                    yticklabels=[m.upper() for m in models],
+                    xticklabels=display_names,
+                    yticklabels=display_names,
                     cbar_kws={'label': 'Adjusted p-value (Bonferroni)'},
                     ax=ax1, linewidths=0.5, linecolor='gray')
-        ax1.set_title('Statistical Significance (Bonferroni-corrected)\n*** p<0.001, ** p<0.01, * p<0.05', fontsize=12, fontweight='bold')
+        ax1.set_title('Statistical Significance (Bonferroni-corrected)\n*** p<0.001, ** p<0.01, * p<0.05', fontsize=12,
+                      fontweight='bold')
 
         # Heatmap 2: Performance differences
         sns.heatmap(perf_matrix, annot=True, fmt='.3f',
                     cmap='RdBu_r', center=0,
-                    xticklabels=[m.upper() for m in models],
-                    yticklabels=[m.upper() for m in models],
+                    xticklabels=display_names,
+                    yticklabels=display_names,
                     cbar_kws={'label': f'{metric} Difference (Row - Column)'},
                     ax=ax2, linewidths=0.5, linecolor='gray')
         ax2.set_title(f'Performance Differences\n(Positive = Row model better)', fontsize=12, fontweight='bold')
 
         plt.suptitle(f'Comprehensive Statistical Comparison - {metric}', fontsize=14, fontweight='bold', y=1.02)
         plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, f'{metric}_significance_heatmap_comprehensive.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(self.output_dir, f'{metric}_significance_heatmap_comprehensive.png'), dpi=300,
+                    bbox_inches='tight')
         plt.close()
 
         print(f"Comprehensive significance heatmap saved to: {self.output_dir}")
@@ -878,7 +1164,7 @@ class AggregatedStatisticalAnalyzer:
 
         report_path = os.path.join(self.output_dir, 'comprehensive_statistical_report.txt')
 
-        with open(report_path, 'w') as f:
+        with open(report_path, 'w', encoding='utf-8') as f:
             f.write("=" * 80 + "\n")
             f.write("COMPREHENSIVE STATISTICAL ANALYSIS REPORT\n")
             f.write("=" * 80 + "\n\n")
@@ -927,7 +1213,8 @@ class AggregatedStatisticalAnalyzer:
                     f.write(f"Test Statistic: {friedman_result['statistic']:.4f}\n")
                     f.write(f"P-value: {friedman_result['p_value']:.4e}\n")
                     f.write(f"Kendall's W (effect size): {friedman_result['kendalls_w']:.4f}\n")
-                    f.write(f"Conclusion: {'Significant differences exist (p < 0.05)' if friedman_result['significant'] else 'No significant differences (p ≥ 0.05)'}\n")
+                    f.write(
+                        f"Conclusion: {'Significant differences exist (p < 0.05)' if friedman_result['significant'] else 'No significant differences (p ≥ 0.05)'}\n")
 
                     if friedman_result['significant']:
                         f.write("\nInterpretation:\n")
@@ -1046,16 +1333,16 @@ class AggregatedFailureModeAnalyzer:
     """
     Aggregated Failure Mode Analysis across multiple datasets
     """
-    
+
     def __init__(self, datasets_info: List[Dict], models: List[str],
                  output_dir: str, iou_threshold: float = 0.5):
         self.datasets_info = datasets_info
         self.models = models
         self.output_dir = output_dir
         self.iou_threshold = iou_threshold
-        
+
         os.makedirs(output_dir, exist_ok=True)
-        
+
         self.failure_modes = {
             'missed_detection': 'Ground truth object not detected',
             'background_fp': 'False positive on background',
@@ -1064,17 +1351,17 @@ class AggregatedFailureModeAnalyzer:
             'duplicate_detection': 'Multiple predictions for same object',
             'split_detection': 'Object split into multiple detections'
         }
-    
+
     def analyze_image(self, gt_path: str, inf_path: str, img_width: int, img_height: int) -> Dict:
         """Analyze failure modes for a single image"""
         gt_boxes = load_yolo_boxes(gt_path)
         pred_boxes = load_inference_boxes(inf_path, img_width, img_height)
-        
+
         failures = defaultdict(int)
-        
+
         # Match predictions to ground truth
         matched_pred = set()
-        
+
         for gt_box in gt_boxes:
             # Find all predictions that match this GT
             matches = []
@@ -1082,7 +1369,7 @@ class AggregatedFailureModeAnalyzer:
                 iou = calculate_iou(pred_box, gt_box)
                 if iou > 0:
                     matches.append((i, iou, pred_box.cls == gt_box.cls))
-            
+
             if len(matches) == 0:
                 # Missed detection
                 failures['missed_detection'] += 1
@@ -1090,24 +1377,24 @@ class AggregatedFailureModeAnalyzer:
                 # Sort by IoU
                 matches.sort(key=lambda x: x[1], reverse=True)
                 best_match = matches[0]
-                
+
                 if best_match[1] < self.iou_threshold:
                     # Poor localization
                     failures['boundary_error'] += 1
-                
+
                 if not best_match[2]:
                     # Wrong class
                     failures['class_confusion'] += 1
-                
+
                 # Check for duplicates
                 high_iou_matches = [m for m in matches if m[1] >= self.iou_threshold]
                 if len(high_iou_matches) > 1:
                     failures['duplicate_detection'] += len(high_iou_matches) - 1
-                
+
                 # Mark predictions as matched
                 for pred_idx, _, _ in high_iou_matches:
                     matched_pred.add(pred_idx)
-        
+
         # Analyze unmatched predictions (false positives)
         for i, pred_box in enumerate(pred_boxes):
             if i not in matched_pred:
@@ -1117,37 +1404,37 @@ class AggregatedFailureModeAnalyzer:
                     if calculate_iou(pred_box, gt_box) > 0.1:
                         has_overlap = True
                         break
-                
+
                 if has_overlap:
                     failures['split_detection'] += 1
                 else:
                     failures['background_fp'] += 1
-        
+
         return dict(failures)
-    
+
     def analyze_single_dataset(self, dataset_info: Dict) -> pd.DataFrame:
         """Analyze failure modes for a single dataset"""
         dataset_name = dataset_info['name']
         gt_folder = dataset_info['gt_folder']
         inference_root = dataset_info['inference_root']
         image_folder = dataset_info['image_folder']
-        
+
         print(f"  Analyzing dataset: {dataset_name}")
-        
+
         image_files = [f.replace('.txt', '') for f in os.listdir(gt_folder)
-                      if f.endswith('.txt')]
-        
+                       if f.endswith('.txt')]
+
         all_results = []
-        
+
         for model in self.models:
             model_failures = defaultdict(int)
-            
+
             for img_name in image_files:
                 # Get image dimensions
                 image_path = os.path.join(image_folder, f"{img_name}.jpg")
                 if not os.path.exists(image_path):
                     image_path = os.path.join(image_folder, f"{img_name}.png")
-                
+
                 if os.path.exists(image_path):
                     img = cv2.imread(image_path)
                     if img is not None:
@@ -1156,88 +1443,108 @@ class AggregatedFailureModeAnalyzer:
                         img_width, img_height = 640, 640
                 else:
                     img_width, img_height = 640, 640
-                
+
                 gt_path = os.path.join(gt_folder, f"{img_name}.txt")
                 inf_path = os.path.join(inference_root, model, f"{img_name}.txt")
-                
+
                 img_failures = self.analyze_image(gt_path, inf_path, img_width, img_height)
-                
+
                 for mode, count in img_failures.items():
                     model_failures[mode] += count
-            
-            # Add results
+
+            # Add results - ensure ALL failure modes are present, even if zero
             result = {
                 'dataset': dataset_name,
                 'model': model
             }
-            result.update(model_failures)
-            
-            # Calculate percentages
-            total_failures = sum(model_failures.values())
+            # Add all failure modes with explicit 0 if not present
             for mode in self.failure_modes.keys():
-                count = model_failures.get(mode, 0)
+                result[mode] = model_failures.get(mode, 0)
+
+            # Calculate percentages
+            total_failures = sum(result[mode] for mode in self.failure_modes.keys())
+            for mode in self.failure_modes.keys():
+                count = result[mode]
                 result[f'{mode}_pct'] = (count / total_failures * 100) if total_failures > 0 else 0
-            
+
             all_results.append(result)
-        
+
         return pd.DataFrame(all_results)
-    
+
     def analyze_all_datasets(self) -> pd.DataFrame:
         """Analyze all datasets and aggregate results"""
         all_dfs = []
-        
+
         for dataset_info in self.datasets_info:
             df = self.analyze_single_dataset(dataset_info)
             all_dfs.append(df)
-        
+
         # Combine all results
         combined_df = pd.concat(all_dfs, ignore_index=True)
-        
+
         # Save combined results
         output_path = os.path.join(self.output_dir, 'failure_modes_all_datasets.csv')
         combined_df.to_csv(output_path, index=False)
         print(f"\nAggregated failure mode results saved to: {output_path}")
-        
+
         # Also save aggregated summary (summed across datasets)
         aggregated_df = self._aggregate_across_datasets(combined_df)
         agg_output_path = os.path.join(self.output_dir, 'failure_modes_aggregated_summary.csv')
         aggregated_df.to_csv(agg_output_path, index=False)
         print(f"Aggregated summary saved to: {agg_output_path}")
-        
+
         return combined_df
-    
+
     def _aggregate_across_datasets(self, df: pd.DataFrame) -> pd.DataFrame:
         """Aggregate failure counts across all datasets"""
+        # Only include columns that exist in the dataframe
+        available_failure_modes = [mode for mode in self.failure_modes.keys() if mode in df.columns]
+
+        if not available_failure_modes:
+            print("  ⚠️  WARNING: No failure mode columns found in dataframe")
+            return pd.DataFrame()
+
         failure_cols = [col for col in df.columns
-                       if col not in ['dataset', 'model'] and not col.endswith('_pct')]
-        
+                        if col not in ['dataset', 'model'] and not col.endswith('_pct')]
+
         # Group by model and sum failure counts
         grouped = df.groupby('model')[failure_cols].sum().reset_index()
-        
-        # Recalculate percentages
-        for mode in self.failure_modes.keys():
-            if mode in grouped.columns:
-                grouped['total_failures'] = grouped[list(self.failure_modes.keys())].sum(axis=1)
-                grouped[f'{mode}_pct'] = (grouped[mode] / grouped['total_failures'] * 100).fillna(0)
-        
+
+        # Recalculate percentages for available failure modes only
+        if available_failure_modes:
+            # Calculate total using only available failure modes
+            grouped['total_failures'] = grouped[
+                [mode for mode in available_failure_modes if mode in grouped.columns]].sum(axis=1)
+
+            for mode in available_failure_modes:
+                if mode in grouped.columns:
+                    grouped[f'{mode}_pct'] = (grouped[mode] / grouped['total_failures'] * 100).fillna(0)
+
         return grouped
-    
+
     def plot_aggregated_failure_modes(self, df: pd.DataFrame):
         """Visualize aggregated failure mode distributions"""
         # Aggregate across datasets
         agg_df = self._aggregate_across_datasets(df)
-        
+
+        # Order models and add display names
+        agg_df = agg_df.copy()
+        ordered_models = get_ordered_models(agg_df['model'].unique())
+        agg_df['model'] = pd.Categorical(agg_df['model'], categories=ordered_models, ordered=True)
+        agg_df = agg_df.sort_values('model')
+        agg_df['display_name'] = agg_df['model'].apply(get_display_name)
+
         failure_cols = [col for col in agg_df.columns if col in self.failure_modes.keys()]
-        
+
         if len(failure_cols) == 0:
             return
-        
+
         # Plot 1: Stacked bar chart (aggregated)
         plt.figure(figsize=(12, 6))
-        df_plot = agg_df.set_index('model')[failure_cols]
+        df_plot = agg_df.set_index('display_name')[failure_cols]
         df_plot.plot(kind='bar', stacked=True, figsize=(12, 6),
-                    colormap='Set3', edgecolor='black', linewidth=0.5)
-        
+                     colormap='Set3', edgecolor='black', linewidth=0.5)
+
         plt.title('Failure Mode Distribution by Model (All Datasets)', fontsize=14, fontweight='bold')
         plt.xlabel('Model', fontsize=12)
         plt.ylabel('Number of Failures', fontsize=12)
@@ -1247,38 +1554,44 @@ class AggregatedFailureModeAnalyzer:
         plt.tight_layout()
         plt.savefig(os.path.join(self.output_dir, 'failure_modes_stacked_aggregated.png'), dpi=300)
         plt.close()
-        
+
         # Plot 2: Per-dataset comparison
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         axes = axes.flatten()
-        
+
+        # Order df for per-dataset plots
+        df = df.copy()
+        df['model'] = pd.Categorical(df['model'], categories=ordered_models, ordered=True)
+        df = df.sort_values('model')
+        df['display_name'] = df['model'].apply(get_display_name)
+
         datasets = df['dataset'].unique()
         for idx, dataset in enumerate(datasets):
             if idx >= len(axes):
                 break
-            
+
             ax = axes[idx]
-            dataset_df = df[df['dataset'] == dataset].set_index('model')[failure_cols]
-            
+            dataset_df = df[df['dataset'] == dataset].set_index('display_name')[failure_cols]
+
             dataset_df.plot(kind='bar', stacked=True, ax=ax, colormap='Set3', edgecolor='black', linewidth=0.5)
-            
+
             ax.set_title(f'{dataset}', fontsize=12, fontweight='bold')
             ax.set_xlabel('Model', fontsize=10)
             ax.set_ylabel('Failures', fontsize=10)
             ax.legend().set_visible(False)
             ax.tick_params(axis='x', rotation=45, labelsize=8)
-        
+
         # Hide unused subplots
         for idx in range(len(datasets), len(axes)):
             axes[idx].set_visible(False)
-        
+
         # Add legend to the figure
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, title='Failure Mode', loc='center left', bbox_to_anchor=(0.95, 0.5))
-        
+
         plt.suptitle('Failure Modes - Per Dataset Comparison', fontsize=16, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 0.95, 1])
         plt.savefig(os.path.join(self.output_dir, 'failure_modes_per_dataset.png'), dpi=300)
         plt.close()
-        
+
         print(f"Aggregated failure mode plots saved to: {self.output_dir}")
