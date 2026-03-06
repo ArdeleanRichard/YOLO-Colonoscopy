@@ -8,6 +8,44 @@ import seaborn as sns
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from collections import defaultdict
+from constants import map_names, SIZE_CATEGORIES
+
+
+def get_ordered_models(models_list):
+    """
+    Order models according to map_names dictionary order.
+
+    Args:
+        models_list: List of model identifiers
+
+    Returns:
+        List of models ordered according to map_names
+    """
+    # Get the order from map_names dictionary keys
+    map_names_order = list(map_names.keys())
+
+    # Filter to only include models that exist in both lists
+    ordered = [m for m in map_names_order if m in models_list]
+
+    # Add any models not in map_names at the end
+    for m in models_list:
+        if m not in ordered:
+            ordered.append(m)
+
+    return ordered
+
+
+def get_display_name(model_id):
+    """
+    Get display name for a model from map_names dictionary.
+
+    Args:
+        model_id: Model identifier (e.g., 'yolo8')
+
+    Returns:
+        Display name (e.g., 'YOLOv8'), or original id if not in map_names
+    """
+    return map_names.get(model_id, model_id)
 
 
 @dataclass
@@ -31,7 +69,6 @@ class BoundingBox:
         x2 = self.x_center + self.width / 2
         y2 = self.y_center + self.height / 2
         return x1, y1, x2, y2
-
 
 
 def load_yolo_boxes(label_path: str) -> List[BoundingBox]:
@@ -89,13 +126,11 @@ def load_inference_boxes(inference_path: str, image_width: int = 640, image_heig
                     h_pixel = float(parts[4])
                     conf = float(parts[5])
 
-
                     # Normalize to 0-1 range
                     x_norm = x_pixel / image_width
                     y_norm = y_pixel / image_height
                     w_norm = w_pixel / image_width
                     h_norm = h_pixel / image_height
-
 
                     boxes.append(BoundingBox(cls, x_norm, y_norm, w_norm, h_norm, conf))
             else:
@@ -154,12 +189,7 @@ class ObjectSizeAnalyzer:
         os.makedirs(output_dir, exist_ok=True)
 
         # Define size categories based on normalized area
-        self.size_categories = {
-            'tiny': (0, 0.0001),      # < 0.01% of image
-            'small': (0.0001, 0.001),  # 0.01% - 0.1%
-            'medium': (0.001, 0.01),   # 0.1% - 1%
-            'large': (0.01, 1.0)       # > 1%
-        }
+        self.size_categories = SIZE_CATEGORIES
 
     def categorize_by_size(self, box: BoundingBox) -> str:
         """Categorize a box by its size"""
@@ -173,7 +203,6 @@ class ObjectSizeAnalyzer:
         """Analyze detections for a single image and model"""
         gt_path = os.path.join(self.gt_folder, f"{image_name}.txt")
         inf_path = os.path.join(self.inference_root, model, f"{image_name}.txt")
-
 
         img_height, img_width = None, None
         for ext in ['.png', '.jpg', '.jpeg', '.tif', '.tiff']:
@@ -244,14 +273,14 @@ class ObjectSizeAnalyzer:
 
         # Get list of images from ground truth folder
         image_files = [f.replace('.txt', '') for f in os.listdir(self.gt_folder)
-                      if f.endswith('.txt')]
+                       if f.endswith('.txt')]
 
         print(f"Analyzing {len(image_files)} images for {len(self.models)} models...")
 
         for model in self.models:
             print(f"  Processing model: {model}")
             model_results = {cat: {'tp': 0, 'fp': 0, 'fn': 0}
-                           for cat in self.size_categories.keys()}
+                             for cat in self.size_categories.keys()}
 
             for img_name in image_files:
                 img_results = self.analyze_single_image(img_name, model)
@@ -293,10 +322,20 @@ class ObjectSizeAnalyzer:
 
     def plot_results(self, df: pd.DataFrame):
         """Create visualizations for size category analysis"""
+        # Order models and add display names
+        df = df.copy()
+        df['display_name'] = df['model'].apply(get_display_name)
+        ordered_models = get_ordered_models(df['model'].unique())
+        df['model'] = pd.Categorical(df['model'], categories=ordered_models, ordered=True)
+        df = df.sort_values('model')
+
         # Plot 1: F1 score by size category
         plt.figure(figsize=(12, 6))
         pivot_f1 = df.pivot(index='model', columns='size_category', values='f1')
-        pivot_f1 = pivot_f1[['tiny', 'small', 'medium', 'large']]  # Order categories
+        pivot_f1 = pivot_f1[list(self.size_categories.keys())]  # Order categories
+
+        # Reindex with display names
+        pivot_f1.index = [get_display_name(m) for m in pivot_f1.index]
 
         ax = pivot_f1.plot(kind='bar', figsize=(12, 6))
         plt.title('F1 Score by Object Size Category', fontsize=14, fontweight='bold')
@@ -313,19 +352,20 @@ class ObjectSizeAnalyzer:
         fig, axes = plt.subplots(2, 4, figsize=(16, 8))
         axes = axes.flatten()
 
-        for idx, model in enumerate(sorted(df['model'].unique())):
+        for idx, model in enumerate(ordered_models):
             if idx >= len(axes):
                 break
 
             model_data = df[df['model'] == model]
+            display_name = get_display_name(model)
 
             for _, row in model_data.iterrows():
                 axes[idx].scatter(row['recall'], row['precision'],
-                                s=100, label=row['size_category'], alpha=0.7)
+                                  s=100, label=row['size_category'], alpha=0.7)
 
             axes[idx].set_xlabel('Recall', fontsize=10)
             axes[idx].set_ylabel('Precision', fontsize=10)
-            axes[idx].set_title(model.upper(), fontsize=11, fontweight='bold')
+            axes[idx].set_title(display_name, fontsize=11, fontweight='bold')
             axes[idx].set_xlim(0, 1)
             axes[idx].set_ylim(0, 1)
             axes[idx].grid(alpha=0.3)
@@ -338,12 +378,16 @@ class ObjectSizeAnalyzer:
         # Plot 3: Heatmap of F1 scores
         plt.figure(figsize=(10, 6))
         pivot_f1 = df.pivot(index='model', columns='size_category', values='f1')
-        pivot_f1 = pivot_f1[['tiny', 'small', 'medium', 'large']]
+        pivot_f1 = pivot_f1[list(self.size_categories.keys())]
+
+        # Reorder by ordered_models and use display names
+        pivot_f1 = pivot_f1.reindex(ordered_models)
+        pivot_f1.index = [get_display_name(m) for m in pivot_f1.index]
 
         sns.heatmap(pivot_f1, annot=True, fmt='.3f', cmap='YlOrRd',
-                   cbar_kws={'label': 'F1 Score'})
+                    cbar_kws={'label': 'F1 Score'})
         plt.title('F1 Score Heatmap by Model and Size Category',
-                 fontsize=14, fontweight='bold')
+                  fontsize=14, fontweight='bold')
         plt.xlabel('Size Category', fontsize=12)
         plt.ylabel('Model', fontsize=12)
         plt.tight_layout()
@@ -366,7 +410,7 @@ class StatisticalAnalyzer:
         self.df = pd.read_csv(results_csv_path)
 
     def compute_confidence_intervals(self, metric: str = 'box_mAP@50',
-                                   confidence: float = 0.95) -> pd.DataFrame:
+                                     confidence: float = 0.95) -> pd.DataFrame:
         """
         Compute confidence intervals using bootstrap
         Note: This requires per-image results. If only aggregate results available,
@@ -423,7 +467,7 @@ class StatisticalAnalyzer:
         Uses Wilcoxon signed-rank test (non-parametric) for paired comparisons across datasets
         For single dataset, performs simple comparison with effect size
         """
-        models = sorted(self.df['model'].unique())
+        models = get_ordered_models(self.df['model'].unique())
         datasets = sorted(self.df['dataset'].unique())
 
         results = []
@@ -513,18 +557,27 @@ class StatisticalAnalyzer:
         """Plot confidence intervals for each model across datasets"""
         datasets = sorted(df_ci['dataset'].unique())
 
-        fig, axes = plt.subplots(1, len(datasets), figsize=(5*len(datasets), 6))
+        # Add display names
+        df_ci = df_ci.copy()
+        df_ci['display_name'] = df_ci['model'].apply(get_display_name)
+
+        fig, axes = plt.subplots(1, len(datasets), figsize=(5 * len(datasets), 6))
         if len(datasets) == 1:
             axes = [axes]
 
         for idx, dataset in enumerate(datasets):
-            data = df_ci[df_ci['dataset'] == dataset].sort_values('mean', ascending=False)
+            data = df_ci[df_ci['dataset'] == dataset]
+
+            # Order by map_names order, then sort by mean value
+            ordered_models = get_ordered_models(data['model'].unique())
+            data['model'] = pd.Categorical(data['model'], categories=ordered_models, ordered=True)
+            data = data.sort_values('model')
 
             y_pos = np.arange(len(data))
-            axes[idx].barh(y_pos, data['mean'], xerr=data['ci_width']/2,
-                          alpha=0.7, capsize=5)
+            axes[idx].barh(y_pos, data['mean'], xerr=data['ci_width'] / 2,
+                           alpha=0.7, capsize=5)
             axes[idx].set_yticks(y_pos)
-            axes[idx].set_yticklabels(data['model'].str.upper())
+            axes[idx].set_yticklabels(data['display_name'])
             axes[idx].set_xlabel(metric, fontsize=11)
             axes[idx].set_title(f'{dataset}', fontsize=12, fontweight='bold')
             axes[idx].grid(axis='x', alpha=0.3)
@@ -551,7 +604,7 @@ class StatisticalAnalyzer:
             print("Error: Cannot find model columns in comparison results")
             return
 
-        models = sorted(set(df_tests[model_col_a].unique()) | set(df_tests[model_col_b].unique()))
+        models = get_ordered_models(set(df_tests[model_col_a].unique()) | set(df_tests[model_col_b].unique()))
 
         # Create matrix for values
         n = len(models)
@@ -588,22 +641,25 @@ class StatisticalAnalyzer:
                     text_matrix[i, j] = '▼'
                     text_matrix[j, i] = '▲'
 
+        # Create display names for labels
+        display_names = [get_display_name(m) for m in models]
+
         # Plot heatmap
         plt.figure(figsize=(10, 8))
 
         if 'p_value' in df_tests.columns:
             # Statistical test version
             sns.heatmap(value_matrix, annot=text_matrix, fmt='',
-                       xticklabels=[m.upper() for m in models],
-                       yticklabels=[m.upper() for m in models],
-                       cmap='RdYlGn_r', cbar_kws={'label': '-log10(p-value)'})
+                        xticklabels=display_names,
+                        yticklabels=display_names,
+                        cmap='RdYlGn_r', cbar_kws={'label': '-log10(p-value)'})
             title = f'Statistical Significance Between Models ({metric})'
         else:
             # Simple comparison version
             sns.heatmap(value_matrix, annot=text_matrix, fmt='',
-                       xticklabels=[m.upper() for m in models],
-                       yticklabels=[m.upper() for m in models],
-                       cmap='RdYlGn', cbar_kws={'label': 'Absolute Difference'})
+                        xticklabels=display_names,
+                        yticklabels=display_names,
+                        cmap='RdYlGn', cbar_kws={'label': 'Absolute Difference'})
             title = f'Pairwise Performance Comparison ({metric})\n▲=better, ▼=worse'
 
         plt.title(title, fontsize=14, fontweight='bold')
@@ -727,7 +783,7 @@ class FailureModeAnalyzer:
         all_results = []
 
         image_files = [f.replace('.txt', '') for f in os.listdir(self.gt_folder)
-                      if f.endswith('.txt')]
+                       if f.endswith('.txt')]
 
         print(f"Analyzing failure modes for {len(image_files)} images and {len(self.models)} models...")
 
@@ -764,14 +820,21 @@ class FailureModeAnalyzer:
 
     def plot_failure_modes(self, df: pd.DataFrame):
         """Visualize failure mode distributions"""
+        # Order models and add display names
+        df = df.copy()
+        ordered_models = get_ordered_models(df['model'].unique())
+        df['model'] = pd.Categorical(df['model'], categories=ordered_models, ordered=True)
+        df = df.sort_values('model')
+        df['display_name'] = df['model'].apply(get_display_name)
+
         # Plot 1: Stacked bar chart of failure counts
         failure_cols = [col for col in df.columns if col in self.failure_modes.keys()]
 
         if len(failure_cols) > 0:
             plt.figure(figsize=(12, 6))
-            df_plot = df.set_index('model')[failure_cols]
+            df_plot = df.set_index('display_name')[failure_cols]
             df_plot.plot(kind='bar', stacked=True, figsize=(12, 6),
-                        colormap='Set3', edgecolor='black', linewidth=0.5)
+                         colormap='Set3', edgecolor='black', linewidth=0.5)
 
             plt.title('Failure Mode Distribution by Model', fontsize=14, fontweight='bold')
             plt.xlabel('Model', fontsize=12)
@@ -788,11 +851,11 @@ class FailureModeAnalyzer:
 
         if len(pct_cols) > 0:
             plt.figure(figsize=(12, 6))
-            df_pct = df.set_index('model')[pct_cols]
+            df_pct = df.set_index('display_name')[pct_cols]
             df_pct.columns = [col.replace('_pct', '') for col in df_pct.columns]
 
             df_pct.plot(kind='bar', stacked=True, figsize=(12, 6),
-                       colormap='Set3', edgecolor='black', linewidth=0.5)
+                        colormap='Set3', edgecolor='black', linewidth=0.5)
 
             plt.title('Failure Mode Percentage by Model', fontsize=14, fontweight='bold')
             plt.xlabel('Model', fontsize=12)
@@ -808,10 +871,10 @@ class FailureModeAnalyzer:
         # Plot 3: Heatmap
         if len(failure_cols) > 0:
             plt.figure(figsize=(10, 6))
-            df_heatmap = df.set_index('model')[failure_cols]
+            df_heatmap = df.set_index('display_name')[failure_cols]
 
             sns.heatmap(df_heatmap, annot=True, fmt='.0f', cmap='YlOrRd',
-                       cbar_kws={'label': 'Number of Failures'})
+                        cbar_kws={'label': 'Number of Failures'})
 
             plt.title('Failure Mode Heatmap', fontsize=14, fontweight='bold')
             plt.xlabel('Failure Mode', fontsize=12)

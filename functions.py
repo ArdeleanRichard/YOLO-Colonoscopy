@@ -14,8 +14,11 @@ from constants import (yolo12_model_config, yolo12_model_path, yolo12_model_name
                        yolo11_model_config, yolo11_model_name, yolo11_model_path,
                        yoloe_model_config, yoloe_model_name, yoloe_model_path,
                        yoloworld_model_config, yoloworld_model_name, yoloworld_model_path,
+                       yolo26_model_config, yolo26_model_name, yolo26_model_path,
                        results_root, results_fig_root, results_inf_root,
-                       dataset_yaml_path, dataset_SEG_yaml_path, image_folder, label_folder, yolo26_model_config, yolo26_model_name, yolo26_model_path)
+                       dataset_yaml_path, dataset_SEG_yaml_path, image_folder, label_folder,
+                       map_names, dataset_test_yaml_path, results_root_test, dataset_test_SEG_yaml_path,
+                       data_test_image_folder, data_test_label_folder, results_fig_root_test)
 
 
 
@@ -59,6 +62,8 @@ def load_model_test(model_name):
         return YOLOE(yoloe_model_path)
     elif model_name == "yolow":
         return YOLOWorld(yoloworld_model_path)
+    elif model_name == "yolo26":
+        return YOLO(yolo26_model_path)
     else:
         raise Exception("Model missing")
 
@@ -71,29 +76,39 @@ class ModelLoader:
     def load_model(self):
         if self.model_name == "rtdetr":
             self.model = RTDETR(detr_model_path)
+            print(f"Model: {self.model_name} from {detr_model_path}")
         elif self.model_name == "yolo8":
             self.model = YOLO(yolo8_model_path)
+            print(f"Model: {self.model_name} from {yolo8_model_path}")
         elif self.model_name == "yolo9":
             self.model = YOLO(yolo9_model_path)
+            print(f"Model: {self.model_name} from {yolo9_model_path}")
         elif self.model_name == "yolo10":
             self.model = YOLO(yolo10_model_path)
+            print(f"Model: {self.model_name} from {yolo10_model_path}")
         elif self.model_name == "yolo11":
             self.model = YOLO(yolo11_model_path)
+            print(f"Model: {self.model_name} from {yolo11_model_path}")
         elif self.model_name == "yolo12":
             self.model = YOLO(yolo12_model_path)
+            print(f"Model: {self.model_name} from {yolo12_model_path}")
         elif self.model_name == "yoloe":
             self.model = YOLOE(yoloe_model_path)
+            print(f"Model: {self.model_name} from {yoloe_model_path}")
         elif self.model_name == "yolow":
             self.model = YOLOWorld(yoloworld_model_path)
+            print(f"Model: {self.model_name} from {yoloworld_model_path}")
+        elif self.model_name == "yolo26":
+            self.model = YOLO(yolo26_model_path)
+            print(f"Model: {self.model_name} from {yolo26_model_path}")
         else:
             raise Exception("Model missing")
 
-        print(f"Model: {self.model_name}")
         print(f"Model classes: {self.model.names}")
 
 
 class ModelEvaluator(ModelLoader):
-    def __init__(self, MODEL_NAME, DATA, device, conf=0.5, iou=0.5):
+    def __init__(self, MODEL_NAME, DATA, device, conf=0.5, iou=0.5, mode=None):
         super().__init__(MODEL_NAME)
         self.dataset_name = DATA
         print(f"Dataset: {self.dataset_name}")
@@ -105,6 +120,7 @@ class ModelEvaluator(ModelLoader):
         self.conf = conf
         self.iou = iou
         self.metrics = None
+        self.mode=mode
 
 
     def evaluate(self):
@@ -116,11 +132,18 @@ class ModelEvaluator(ModelLoader):
         """
         self.model.to(self.device)
 
-        os.makedirs(f"{results_root}/runs_test/{self.model_name}/", exist_ok=True)
+        if self.mode is None:
+            results_path = f"{results_root}/runs_test/{self.model_name}/"
+            os.makedirs(results_path, exist_ok=True)
+            data_yaml = dataset_yaml_path if self.model_name != "yoloe" else dataset_SEG_yaml_path
+        if self.mode == "cross":
+            results_path = f"{results_root_test}/runs_test/{self.model_name}/"
+            os.makedirs(results_path, exist_ok=True)
+            data_yaml = dataset_test_yaml_path if self.model_name != "yoloe" else dataset_test_SEG_yaml_path
 
         # Run YOLO validation on the dataset
-        val_results = self.model.val(data=dataset_yaml_path if self.model_name != "yoloe" else dataset_SEG_yaml_path,
-                                     project=f"{results_root}/runs_test/{self.model_name}/",
+        val_results = self.model.val(data=data_yaml,
+                                     project=results_path,
                                      conf=self.conf, iou=self.iou, split='test',
                                      save_json=True)
 
@@ -208,6 +231,8 @@ class ModelEvaluator(ModelLoader):
             print(f"Seg Mean Recall:    {self.metrics['Mask Recall']:.3f}")
 
 
+
+
 class PlotHelper:
     def __init__(self):
         # === COLOR MAP (tab10 with proper BGR tuples) ===
@@ -252,21 +277,29 @@ class PlotHelper:
 
 
 class ModelPlotter(PlotHelper, ModelLoader):
-    def __init__(self, MODEL_NAME):
+    def __init__(self, MODEL_NAME, mode=None):
         super().__init__()
         self.model_name = MODEL_NAME
 
         self.combined_images = None
 
+        if mode is None:
+            self.image_folder = image_folder
+            self.label_folder = label_folder
+            self.results_fig_root = results_fig_root
+        if mode == "cross":
+            self.image_folder = data_test_image_folder
+            self.label_folder = data_test_label_folder
+            self.results_fig_root = results_fig_root_test
 
     def prepare_images(self, nr_images=4):
-        images = self.get_file_names(image_folder, nr_images)  # Get 4 images
+        images = self.get_file_names(self.image_folder, nr_images)  # Get 4 images
 
         combined_images = []
 
         for img_file in images:
-            img_path = os.path.join(image_folder, img_file)
-            label_path = os.path.join(label_folder, os.path.splitext(img_file)[0] + ".txt")
+            img_path = os.path.join(self.image_folder, img_file)
+            label_path = os.path.join(self.label_folder, os.path.splitext(img_file)[0] + ".txt")
 
             # Load image and prepare copies
             img = cv2.imread(img_path)
@@ -327,19 +360,28 @@ class ModelPlotter(PlotHelper, ModelLoader):
         plt.imshow(final_image)
         plt.axis("off")
         plt.tight_layout(pad=0)
-        plt.savefig(f"{results_fig_root}/plot_{self.model_name}.png", bbox_inches="tight", pad_inches=0)
+        plt.savefig(f"{self.results_fig_root}/plot_{self.model_name}.png", bbox_inches="tight", pad_inches=0)
         # plt.show()
         plt.close()
 
 
 class ResultPlotter(PlotHelper, ModelLoader):
-    def __init__(self, model_names):
+    def __init__(self, model_names, mode=None):
         super().__init__()
         self.model_names = model_names
         self.model = None
 
         self.combined_images = None
         self.image_filename = None
+
+        if mode is None:
+            self.image_folder = image_folder
+            self.label_folder = label_folder
+            self.results_fig_root = results_fig_root
+        if mode == "cross":
+            self.image_folder = data_test_image_folder
+            self.label_folder = data_test_label_folder
+            self.results_fig_root = results_fig_root_test
 
     def prepare_single_image_all_models(self, image_index=0):
         """
@@ -352,13 +394,13 @@ class ResultPlotter(PlotHelper, ModelLoader):
             List of combined images (GT + Prediction) for each model
         """
         # Get image files and select one
-        images = self.get_file_names(image_folder, 10)  # Get more files to have options
+        images = self.get_file_names(self.image_folder, 10)  # Get more files to have options
         if image_index >= len(images):
             image_index = 0  # Fallback to first image
 
         img_file = images[image_index]
-        img_path = os.path.join(image_folder, img_file)
-        label_path = os.path.join(label_folder, os.path.splitext(img_file)[0] + ".txt")
+        img_path = os.path.join(self.image_folder, img_file)
+        label_path = os.path.join(self.label_folder, os.path.splitext(img_file)[0] + ".txt")
 
 
         # Load and prepare base image
@@ -367,17 +409,6 @@ class ResultPlotter(PlotHelper, ModelLoader):
 
         # Load ground truth once
         gt_boxes = self.load_yolo_labels(label_path)
-
-        map_names = {
-            "rtdetr": "RT-DETR",
-            "yolo8": "YOLOv8",
-            "yolo9": "YOLOv9",
-            "yolo10": "YOLOv10",
-            "yolo11": "YOLOv11",
-            "yolo12": "YOLOv12",
-            "yoloe": "YOLOE",
-            "yolow": "YOLOWorld",
-        }
 
         text_color = (255, 255, 255)
         combined_images = []
@@ -432,7 +463,7 @@ class ResultPlotter(PlotHelper, ModelLoader):
 
         """
         num_models = len(self.combined_images)  # Should be 8
-        cols = 2  # Number of columns in final plot
+        cols = 3  # Number of columns in final plot
         rows = math.ceil(num_models / cols)  # Should be 4 rows
 
         # Get dimensions
@@ -477,9 +508,9 @@ class ResultPlotter(PlotHelper, ModelLoader):
 
         # Save with descriptive filename
         safe_filename = os.path.splitext(self.image_filename)[0]
-        plt.savefig(f"{results_fig_root}/visualization_{safe_filename}.png", bbox_inches="tight", pad_inches=0, dpi=150)
+        plt.savefig(f"{self.results_fig_root}/visualization_{safe_filename}.png", bbox_inches="tight", pad_inches=0, dpi=150)
         plt.close()
-        print(f"Saved comparison plot to {results_fig_root}/visualization_{safe_filename}.png")
+        print(f"Saved comparison plot to {self.results_fig_root}/visualization_{safe_filename}.png")
 
 
     def create_all_models_comparison(self, image_index=0):
@@ -514,13 +545,13 @@ class InferenceSaver(ModelLoader):
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Get all image files
-        image_files = [f for f in os.listdir(image_folder)
+        image_files = [f for f in os.listdir(self.image_folder)
                        if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tif'))]
 
         print(f"Processing {len(image_files)} images with {self.model_name}...")
 
         for idx, img_file in enumerate(image_files, 1):
-            img_path = os.path.join(image_folder, img_file)
+            img_path = os.path.join(self.image_folder, img_file)
 
             # Run inference
             results = self.model(img_path, conf=self.conf, iou=self.iou, verbose=False)[0]
