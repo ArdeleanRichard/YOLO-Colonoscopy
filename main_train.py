@@ -1,4 +1,3 @@
-# May require: pip install git+https://github.com/openai/CLIP.git
 import os
 
 from ultralytics.models.yolo.yoloe import YOLOEPESegTrainer
