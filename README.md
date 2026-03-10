@@ -12,7 +12,7 @@ by Adriana-Ioana Ardelean, Eugen-Richard Ardelean, and Anca Marginean, published
 
 ## 📄 Overview
 
-This project benchmarks modern object detection models (YOLOv8–v12, YOLOE, YOLO-World, RT-DETR) for automatic polyp detection. It evaluates their ability to detect colorectal polyps across three publicly available datasets:
+This project benchmarks modern object detection models (YOLOv8–v12, YOLO26, YOLOE, YOLO-World, RT-DETR) for automatic polyp detection. It evaluates their ability to detect colonic polyps across three publicly available datasets:
 
 * **CVC-ClinicDB**,
 * **CVC-ColonDB**,
