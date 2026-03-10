@@ -73,14 +73,14 @@ names: [Polyp]
 
 We show here the cross-dataset evaluation for models trained on either CVC-ClinicDB or CVC-ColonDB, then tested on ETIS-LaribPolypDB
 
-| Model   | Dataset         | mAP\@50   | GFLOPs |
-| ------- | --------------- | --------- | ------ |
-| YOLOv8  | CVC-ClinicDB    | 0.669     | 28.4   |
-| YOLOv11 | CVC-ClinicDB    | **0.702** | 21.2   |
-| YOLOE   | CVC-ClinicDB    | 0.690     | 32.6   |
-| YOLOv8  | CVC-ColonDB     | 0.548     | 28.4   |
-| YOLOv11 | CVC-ColonDB     | 0.581     | 21.2   |
-| YOLOE   | CVC-ColonDB     | **0.607** | 32.6   |
+| Model     | Dataset         | mAP\@50   | GFLOPs |
+| --------- | --------------- | --------- | ------ |
+| YOLOv8    | CVC-ClinicDB    | 0.669     | 28.4   |
+| YOLOv11   | CVC-ClinicDB    | **0.702** | 21.2   |
+| YOLO-World| CVC-ClinicDB    | 0.690     | 32.6   |
+| YOLOv8    | CVC-ColonDB     | 0.548     | 28.4   |
+| YOLOv11   | CVC-ColonDB     | 0.581     | 21.2   |
+| YOLO-World| CVC-ColonDB     | **0.607** | 32.6   |
 
 ---
 <!-- 
