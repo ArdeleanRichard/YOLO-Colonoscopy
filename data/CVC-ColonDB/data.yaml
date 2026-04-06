@@ -1,0 +1,5 @@
+train:  ..\..\data\CVC-ColonDB\images\train
+val:    ..\..\data\CVC-ColonDB\images\val
+test:   ..\..\data\CVC-ColonDB\images\test
+nc: 1
+names: [Polyp]

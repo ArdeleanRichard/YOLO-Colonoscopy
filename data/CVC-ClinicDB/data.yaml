@@ -1,0 +1,5 @@
+train:  ..\..\data\CVC-ClinicDB\images\train
+val:    ..\..\data\CVC-ClinicDB\images\val
+test:   ..\..\data\CVC-ClinicDB\images\test
+nc: 1
+names: [Polyp]
