@@ -73,6 +73,8 @@ class ModelLoader:
         self.model_name = model_name
         self.model = None
 
+        self.image_folder = image_folder
+
     def load_model(self):
         if self.model_name == "rtdetr":
             self.model = RTDETR(detr_model_path)

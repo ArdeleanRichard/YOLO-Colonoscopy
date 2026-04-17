@@ -506,7 +506,8 @@ class AggregatedObjectSizeAnalyzer:
         plt.xlabel('Object Size Category', fontsize=12)
         plt.ylabel('F1 Score', fontsize=12)
         plt.title('F1 Score by Object Size (All Datasets)', fontsize=14, fontweight='bold')
-        categories_plot = ['small\n<0.5%', 'medium\n0.5% - 1%', 'large\n1% - 5%', 'very large\n>5%']
+        EN_DASH = '\u2013'
+        categories_plot = ['small\n<0.5%', f'medium\n0.5% {EN_DASH} 1%', f'large\n1% {EN_DASH} 5%', 'very large\n>5%']
         plt.xticks(x + width * (len(self.models) - 1) / 2, categories_plot)
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.grid(axis='y', alpha=0.3)
@@ -545,7 +546,8 @@ class AggregatedObjectSizeAnalyzer:
                              if len(model_data[model_data['size_category'] == cat]) > 0 else 0
                              for cat in categories]
 
-                categories_plot = ['tiny\n<0.01%', 'small\n0.01% - 0.1%', 'medium\n0.1% - 1%', 'large\n>1%']
+                EN_DASH = '\u2013'
+                categories_plot = ['small\n<0.5%', f'medium\n0.5% {EN_DASH} 1%', f'large\n1% {EN_DASH} 5%', 'very large\n>5%']
                 ax.plot(categories_plot, f1_scores, marker='o', label=model.upper(), linewidth=2)
 
             ax.set_title(f'{dataset}', fontsize=12, fontweight='bold')
