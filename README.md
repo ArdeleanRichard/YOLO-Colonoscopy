@@ -2,13 +2,12 @@
 
 This repository contains the code and configurations for a study submitted as a scientific research article.
 
-<!-- 
-[![DOI](https://img.shields.io/badge/DOI-10.3390/diagnostics15141823-blue)](https://doi.org/10.3390/diagnostics15141823) 
+
+[![DOI](https://img.shields.io/badge/DOI-10.3390/computers15040258-blue)](https://doi.org/10.3390/computers15040258) 
 
 This repository contains the code and configurations used in the study titled:
-**"Can YOLO Detect Retinal Pathologies? A Step Towards Automated OCT Analysis"**
-by Adriana-Ioana Ardelean, Eugen-Richard Ardelean, and Anca Marginean, published in *Diagnostics*, 2025.
--->
+**"Colonic Polyp Detection with Object Detection Models"**
+by Raluca Portase, and Eugen-Richard Ardelean, published in *Computers*, 2026.
 
 ## 📄 Overview
 
@@ -83,26 +82,28 @@ We show here the cross-dataset evaluation for models trained on either CVC-Clini
 | YOLO-World| CVC-ColonDB     | **0.607** | 32.6   |
 
 ---
-<!-- 
+
 ## 📜 Citation
 
 If you use this code or reference the models/datasets in your work, please cite:
 
 ```bibtex
-@article{Ardelean2025YOLO,
-  title     = {Can YOLO Detect Retinal Pathologies? A Step Towards Automated OCT Analysis},
-  author    = {Ardelean, Adriana-Ioana and Ardelean, Eugen-Richard and Marginean, Anca},
-  journal   = {Diagnostics},
-  year      = {2025},
-  volume    = {15},
-  number    = {14},
-  pages     = {1823},
-  doi       = {10.3390/diagnostics15141823}
+@article{10.3390/computers15040258,
+    author = {Portase, Raluca and Ardelean, Eugen-Richard},
+    title = {Colonic Polyp Detection with Object Detection Models},
+    journal = {Computers},
+    volume = {15},
+    year = {2026},
+    number = {4},
+    article-number = {258},
+    url = {https://www.mdpi.com/2073-431X/15/4/258},
+    ISSN = {2073-431X},
+    DOI = {10.3390/computers15040258}
 }
 ```
 
 ---
--->
+
 
 ## 📬 Contact
 
